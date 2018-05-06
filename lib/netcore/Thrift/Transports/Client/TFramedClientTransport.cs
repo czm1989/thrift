@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation(ASF) under one
+﻿// Licensed to the Apache Software Foundation(ASF) under one
 // or more contributor license agreements.See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.The ASF licenses this file
@@ -37,14 +37,7 @@ namespace Thrift.Transports.Client
 
         public TFramedClientTransport(TClientTransport transport)
         {
-            throw new NotImplementedException("TFramedClientTransport is not fully ready for usage");
-
-            if (transport == null)
-            {
-                throw new ArgumentNullException(nameof(transport));
-            }
-
-            _transport = transport;
+            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
 
             InitWriteBuffer();
         }
@@ -197,8 +190,9 @@ namespace Thrift.Transports.Client
             {
                 if (disposing)
                 {
-                    _readBuffer.Dispose();
-                    _writeBuffer.Dispose();
+                    _readBuffer?.Dispose();
+                    _writeBuffer?.Dispose();
+                    _transport?.Dispose();
                 }
             }
             _isDisposed = true;

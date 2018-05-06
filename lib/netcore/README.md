@@ -1,21 +1,24 @@
-# Apache Thrift net-core-lib
+# Apache Thrift netcore
 
 Thrift client library ported to Microsoft .Net Core 
 
-# How to build
+# Content
+- Tests/Thrift.PublicInterfaces.Compile.Tests - project for checking public interfaces during adding changes to Thrift library
+- Thrift - Thrift library 
 
-* Download the latest version of dotnet from https://www.microsoft.com/net/core (it can be https://go.microsoft.com/fwlink/?LinkID=809122 in case of VS Code)
-* Install downloaded version of dotnet
-* Clone repo
-* Run **build.sh** or **build.cmd** from the root of cloned repository
-* Check tests in **src/Tests** folder
-* Continue with /tutorials/netcore 
+# Reused components 
+- .NET Standard 1.6 (SDK 2.0.0)
 
-#Notes
+# How to build on Windows
+- Get Thrift IDL compiler executable, add to some folder and add path to this folder into PATH variable
+- Open the Thrift.sln project with Visual Studio and build.
+or 
+- Build with scripts
 
-* No Silverlight suport, no longer supported by Microsoft
+# How to build on Unix
+- Ensure you have .NET Core 2.0.0 SDK installed or use the Ubuntu Xenial docker image
+- Follow common build practice for Thrift: bootstrap, configure, and make
 
-#Known issues
-
-* Framed transport not fully implemenented yet
+# Known issues
+- In trace logging mode you can see some not important internal exceptions
 

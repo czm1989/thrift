@@ -1,4 +1,4 @@
-﻿// Licensed to the Apache Software Foundation(ASF) under one
+// Licensed to the Apache Software Foundation(ASF) under one
 // or more contributor license agreements.See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.The ASF licenses this file
@@ -40,13 +40,13 @@ namespace Server
 {
     public class Program
     {
-        private static readonly ILogger Logger = new LoggerFactory().CreateLogger(nameof(Server));
+        private static readonly ILogger Logger = new LoggerFactory().AddConsole(LogLevel.Trace).AddDebug(LogLevel.Trace).CreateLogger(nameof(Server));
 
         public static void Main(string[] args)
         {
             args = args ?? new string[0];
 
-            if (args.Any(x => x.StartsWith("-h", StringComparison.OrdinalIgnoreCase)))
+            if (args.Any(x => x.StartsWith("-help", StringComparison.OrdinalIgnoreCase)))
             {
                 DisplayHelp();
                 return;
@@ -61,33 +61,37 @@ namespace Server
                 Console.ReadLine();
                 source.Cancel();
             }
+
+            Logger.LogInformation("Server stopped");
         }
 
         private static void DisplayHelp()
         {
-            Console.WriteLine(@"
+            Logger.LogInformation(@"
 Usage: 
-    Server.exe -h
+    Server.exe -help
         will diplay help information 
 
-    Server.exe -t:<transport> -p:<protocol>
+    Server.exe -tr:<transport> -pr:<protocol>
         will run server with specified arguments (tcp transport and binary protocol by default)
 
 Options:
-    -t (transport): 
+    -tr (transport): 
         tcp - (default) tcp transport will be used (host - ""localhost"", port - 9090)
         tcpbuffered - tcp buffered transport will be used (host - ""localhost"", port - 9090)
         namedpipe - namedpipe transport will be used (pipe address - "".test"")
         http - http transport will be used (http address - ""localhost:9090"")
         tcptls - tcp transport with tls will be used (host - ""localhost"", port - 9090)
+        framed - tcp framed transport will be used (host - ""localhost"", port - 9090)
 
-    -p (protocol): 
+    -pr (protocol): 
         binary - (default) binary protocol will be used
         compact - compact protocol will be used
         json - json protocol will be used
+        multiplexed - multiplexed protocol will be used
 
 Sample:
-    Server.exe -t:tcp 
+    Server.exe -tr:tcp 
 ");
         }
 
@@ -102,38 +106,33 @@ Sample:
             }
             else
             {
-                await
-                    RunSelectedConfigurationAsync(selectedTransport, selectedProtocol,
-                        cancellationToken);
+                await RunSelectedConfigurationAsync(selectedTransport, selectedProtocol, cancellationToken);
             }
         }
 
         private static Protocol GetProtocol(string[] args)
         {
-            var transport = args.FirstOrDefault(x => x.StartsWith("-p"))?.Split(':')?[1];
-            Protocol selectedProtocol;
+            var transport = args.FirstOrDefault(x => x.StartsWith("-pr"))?.Split(':')?[1];
 
-            Enum.TryParse(transport, true, out selectedProtocol);
+            Enum.TryParse(transport, true, out Protocol selectedProtocol);
 
             return selectedProtocol;
         }
 
         private static Transport GetTransport(string[] args)
         {
-            var transport = args.FirstOrDefault(x => x.StartsWith("-t"))?.Split(':')?[1];
-            Transport selectedTransport;
+            var transport = args.FirstOrDefault(x => x.StartsWith("-tr"))?.Split(':')?[1];
 
-            Enum.TryParse(transport, true, out selectedTransport);
+            Enum.TryParse(transport, true, out Transport selectedTransport);
 
             return selectedTransport;
         }
 
-        private static async Task RunSelectedConfigurationAsync(Transport transport,
-            Protocol protocol, CancellationToken cancellationToken)
+        private static async Task RunSelectedConfigurationAsync(Transport transport, Protocol protocol, CancellationToken cancellationToken)
         {
-            var fabric = new LoggerFactory();
+            var fabric = new LoggerFactory().AddConsole(LogLevel.Trace).AddDebug(LogLevel.Trace);
             var handler = new CalculatorAsyncHandler();
-            var processor = new Calculator.AsyncProcessor(handler);
+            ITAsyncProcessor processor = null;
 
             TServerTransport serverTransport = null;
 
@@ -143,15 +142,16 @@ Sample:
                     serverTransport = new TServerSocketTransport(9090);
                     break;
                 case Transport.TcpBuffered:
-                    serverTransport = new TServerSocketTransport(port: 9090, clientTimeout: 10000,
-                        useBufferedSockets: true);
+                    serverTransport = new TServerSocketTransport(port: 9090, clientTimeout: 10000, useBufferedSockets: true);
                     break;
                 case Transport.NamedPipe:
                     serverTransport = new TNamedPipeServerTransport(".test");
                     break;
                 case Transport.TcpTls:
-                    serverTransport = new TTlsServerSocketTransport(9090, false, GetCertificate(),
-                        ClientCertValidator, LocalCertificateSelectionCallback);
+                    serverTransport = new TTlsServerSocketTransport(9090, false, GetCertificate(), ClientCertValidator, LocalCertificateSelectionCallback);
+                    break;
+                case Transport.Framed:
+                    serverTransport = new TServerFramedTransport(9090);
                     break;
             }
 
@@ -164,18 +164,39 @@ Sample:
                 {
                     inputProtocolFactory = new TBinaryProtocol.Factory();
                     outputProtocolFactory = new TBinaryProtocol.Factory();
+                    processor = new Calculator.AsyncProcessor(handler);
                 }
                     break;
                 case Protocol.Compact:
                 {
                     inputProtocolFactory = new TCompactProtocol.Factory();
                     outputProtocolFactory = new TCompactProtocol.Factory();
+                    processor = new Calculator.AsyncProcessor(handler);
                 }
                     break;
                 case Protocol.Json:
                 {
                     inputProtocolFactory = new TJsonProtocol.Factory();
                     outputProtocolFactory = new TJsonProtocol.Factory();
+                    processor = new Calculator.AsyncProcessor(handler);
+                }
+                    break;
+                case Protocol.Multiplexed:
+                {
+                    inputProtocolFactory = new TBinaryProtocol.Factory();
+                    outputProtocolFactory = new TBinaryProtocol.Factory();
+
+                    var calcHandler = new CalculatorAsyncHandler();
+                    var calcProcessor = new Calculator.AsyncProcessor(calcHandler);
+
+                    var sharedServiceHandler = new SharedServiceAsyncHandler();
+                    var sharedServiceProcessor = new SharedService.AsyncProcessor(sharedServiceHandler);
+
+                    var multiplexedProcessor = new TMultiplexedProcessor();
+                    multiplexedProcessor.RegisterProcessor(nameof(Calculator), calcProcessor);
+                    multiplexedProcessor.RegisterProcessor(nameof(SharedService), sharedServiceProcessor);
+
+                    processor = multiplexedProcessor;
                 }
                     break;
                 default:
@@ -185,10 +206,9 @@ Sample:
             try
             {
                 Logger.LogInformation(
-                    $"Selected TAsyncServer with {serverTransport} transport and {inputProtocolFactory} protocol factories");
+                    $"Selected TAsyncServer with {serverTransport} transport, {processor} processor and {inputProtocolFactory} protocol factories");
 
-                var server = new AsyncBaseServer(processor, serverTransport, inputProtocolFactory,
-                    outputProtocolFactory, fabric);
+                var server = new AsyncBaseServer(processor, serverTransport, inputProtocolFactory, outputProtocolFactory, fabric);
 
                 Logger.LogInformation("Starting the server...");
                 await server.ServeAsync(cancellationToken);
@@ -197,8 +217,6 @@ Sample:
             {
                 Logger.LogInformation(x.ToString());
             }
-
-            Logger.LogInformation("Server stopped.");
         }
 
         private static X509Certificate2 GetCertificate()
@@ -243,7 +261,8 @@ Sample:
             TcpBuffered,
             NamedPipe,
             Http,
-            TcpTls
+            TcpTls,
+            Framed
         }
 
         private enum Protocol
@@ -251,6 +270,7 @@ Sample:
             Binary,
             Compact,
             Json,
+            Multiplexed
         }
 
         public class HttpServerSample
@@ -266,11 +286,10 @@ Sample:
                     .UseKestrel()
                     .UseUrls("http://localhost:9090")
                     .UseContentRoot(Directory.GetCurrentDirectory())
-                    .UseIISIntegration()
                     .UseStartup<Startup>()
                     .Build();
 
-                host.Run(cancellationToken);
+                host.RunAsync(cancellationToken).GetAwaiter().GetResult();
             }
 
             public class Startup
@@ -305,11 +324,10 @@ Sample:
 
         public class CalculatorAsyncHandler : Calculator.IAsync
         {
-            Dictionary<int, SharedStruct> _log;
+            private readonly Dictionary<int, SharedStruct> _log = new Dictionary<int, SharedStruct>();
 
             public CalculatorAsyncHandler()
             {
-                _log = new Dictionary<int, SharedStruct>();
             }
 
             public async Task<SharedStruct> getStructAsync(int key,
@@ -347,7 +365,7 @@ Sample:
                         break;
 
                     case Operation.MULTIPLY:
-                        val = w.Num1*w.Num2;
+                        val = w.Num1 * w.Num2;
                         break;
 
                     case Operation.DIVIDE:
@@ -361,7 +379,7 @@ Sample:
 
                             throw io;
                         }
-                        val = w.Num1/w.Num2;
+                        val = w.Num1 / w.Num2;
                         break;
 
                     default:
@@ -391,6 +409,19 @@ Sample:
             {
                 Logger.LogInformation("ZipAsync() with delay 100mc");
                 await Task.Delay(100, CancellationToken.None);
+            }
+        }
+
+        public class SharedServiceAsyncHandler : SharedService.IAsync
+        {
+            public async Task<SharedStruct> getStructAsync(int key, CancellationToken cancellationToken)
+            {
+                Logger.LogInformation("GetStructAsync({0})", key);
+                return await Task.FromResult(new SharedStruct()
+                {
+                    Key = key,
+                    Value = "GetStructAsync"
+                });
             }
         }
     }
